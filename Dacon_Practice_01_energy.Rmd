@@ -1,0 +1,154 @@
+---
+title: '[Dacon]Pr-01|Energy'
+output:
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+    theme: readable
+  github_document:
+  html_document: 
+    toc: yes
+    theme: readable
+    toc_float: yes
+    number_sections: yes
+---
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 패키지 설치 
+필요한 각종 패키지를 설치   
+```{r, message=FALSE,eval =FALSE}
+
+install.packages('data.table')
+install.packages('magrittr')
+install.packages('ggplot2')
+install.packages('plotly')
+install.packages('tidyverse')
+install.packages('factoextra') 
+```
+```{r,message=FALSE}
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(plotly)
+library(tidyverse)
+library(factoextra)
+```
+
+# data import
+
+```{r}
+train_data = fread('data/train.csv')
+head(train_data)
+```
+
+## column 변수명 교환
+  
+```{r}
+names(train_data) = c('num','datetime','target','temperature','windspeed','humidity','precipitation','insolation','nelec_cool_flag','solar_flag')
+head(train_data)
+```
+
+
+## 날짜 및 시간 파생변수 도출
+
+```{r}
+train_data[, datetime := as.POSIXct(datetime, tz='', format='%F %H')]
+train_data[, `:=`(date = as.Date(datetime, tz=''),
+                  hour = as.factor(format(datetime, format='%H')), 
+                  #Hours as decimal number (00–23)
+                  Weekday  = as.integer(format(datetime, format='%u')))] 
+                  #monday =1
+train_data <- train_data %>% mutate(Weekend = ifelse(Weekday >= 6, 1,0))
+# Weekend 변수 : 토,일요일은 1, 나머지는 0
+head(train_data)
+```
+
+## 결측값 확인 및 대체 
+
+```{r}
+
+```
+
+# Exploratory Data Analysis (EDA)
+
+## 전력 사용량 분석
+
+### 특정 건물의 요일/시간별 전력사용량
+시간, 요일별 전력사용량의 중앙값을 계산하고 heatmap을 그림 
+```{r}
+  for ( i in 1:5){
+    p = train_data[num==i, .(M = median(target)), by=.(hour, Weekday)] %>% 
+    ggplot(aes(hour, Weekday, fill=M)) + 
+    geom_tile() +
+    scale_fill_distiller(palette='YlGnBu', direction=1) +
+    ggtitle(paste0(i, '번째 건물'))
+    plot(p)
+  }
+```
+열지도에서 색이 짙을수록 전력사용량이 많음
+
+### 특정 건물의 요일/3시간별 전력사용량
+```{r}
+# 3시간 단위로 묶음
+train_data[, hour_by3 := formatC((as.integer(format(datetime, format='%H')) %/% 3)*3, width=2, flag='0')]
+head(train_data)
+agg_cl = train_data[, .(M = median(target)), by=.(num, hour_by3, Weekday)]
+agg_cl
+agg_cl[, Ratio:= M/max(M), by=.(num)] # 각 건물의 최대값으로 normalization 
+agg_cl
+dim(agg_cl)
+dt_cl = dcast(agg_cl, num ~ Weekday+hour_by3, value.var='Ratio')
+dim(dt_cl) #60건물, 7요일*3시간단위8개 
+```
+
+### 계층적 군집화
+```{r}
+  dist_building = dist(dt_cl[, -1])
+  hc_builing = hclust(dist(dt_cl[, -1]), method='ward.D2')
+  #library(factoextra)
+  fviz_dend(hc_builing, k = 5,
+            cex = 0.5,
+            k_colors = RColorBrewer::brewer.pal(5, 'Set1'),
+            color_labels_by_k = TRUE,
+            rect = TRUE,
+            rect_border = RColorBrewer::brewer.pal(5, 'Set1'),
+            rect_fill = TRUE) 
+```
+5가지의 군집으로 묶일 수 있는 것을 알 수 있음. 
+군집별로 요일/시간대별 (최댓값 대비 전력사용량의 중앙값) 비율의 평균을 계산해서 열지도로 표현
+```{r}
+  # 군집 평균(중심)의 시각화
+  dt_cl_result = data.table(num=1:60,
+                            grp=LETTERS[cutree(hc_builing, k=5)])
+  dt_cl_result
+  agg_cl[dt_cl_result, on=.(num), G := i.grp]
+  agg_cl[, .(MM = mean(Ratio)), by=.(G, hour_by3, Weekday)] %>%
+    ggplot(aes(hour_by3, Weekday, fill=MM)) + geom_tile()+
+    scale_fill_distiller(palette='YlGnBu', direction=1) +
+    facet_grid(cols=vars(G))
+```
+
+
+### 일별 전력사용량 추이
+```{r}
+ # 일별 전력사용량 
+  train_data[dt_cl_result, on=.(num), cl_grp := i.grp]
+  p_cl = train_data[, .(TOTAL = sum(target)), by=.(num, cl_grp, date)] %>% 
+    ggplot(aes(date, TOTAL, group=num, color=cl_grp))+ geom_path() 
+  p_cl
+
+```
+
+
+## 비전기냉방설비운영 및 태양광 발전시설 여부 활용
+
+
+
+## 외부변수 활용 
+
+
+
+
+
